@@ -1,9 +1,10 @@
-require('dotenv').config();
-const { Telegraf } = require('telegraf');
-const fetch = (...args) => import('node-fetch').then(mod => mod.default(...args));
-const fs = require('fs/promises');
-const pdfParse = require('pdf-parse');
-const { Pool } = require('pg');
+require("dotenv").config();
+const { Telegraf } = require("telegraf");
+const fetch = (...args) =>
+  import("node-fetch").then((mod) => mod.default(...args));
+const fs = require("fs/promises");
+const pdfParse = require("pdf-parse");
+const { Pool } = require("pg");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const pool = new Pool({
@@ -21,58 +22,71 @@ async function downloadTelegramFile(fileId) {
 }
 
 bot.start((ctx) => {
-  ctx.reply('سلام! یک فایل PDF برای من بفرست تا متن صفحاتش رو استخراج و ذخیره کنم.');
+  ctx.reply(
+    "سلام! یک فایل PDF برای من بفرست تا متن صفحاتش رو استخراج و ذخیره کنم."
+  );
 });
 
-bot.on('document', async (ctx) => {
+bot.on("document", async (ctx) => {
   const doc = ctx.message.document;
 
-  if (doc.mime_type !== 'application/pdf') {
-    return ctx.reply('فقط فایل PDF قابل پردازشه.');
+  if (doc.mime_type !== "application/pdf") {
+    return ctx.reply("فقط فایل PDF قابل پردازشه.");
   }
 
-  await ctx.reply('در حال دریافت و پردازش فایل...');
+  await ctx.reply("در حال دریافت و پردازش فایل...");
 
   try {
     const localPath = await downloadTelegramFile(doc.file_id);
     const buffer = await fs.readFile(localPath);
-    const pdfData = await pdfParse(buffer);
-    const pages = pdfData.text.split(/\f/);
+
+    const pageTexts = [];
+    const pdfData = await pdfParse(buffer, {
+      pagerender: async (pageData) => {
+        const tc = await pageData.getTextContent();
+        const txt = tc.items.map((i) => i.str).join(" ");
+        pageTexts.push(txt.trim());
+        return txt;
+      },
+    });
+
+    const pages = pageTexts.length ? pageTexts : [pdfData.text];
 
     const client = await pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
 
       const result = await client.query(
-        'INSERT INTO documents(user_id, file_id, file_name) VALUES ($1, $2, $3) RETURNING id',
+        "INSERT INTO documents(user_id, file_id, file_name) VALUES ($1, $2, $3) RETURNING id",
         [ctx.from.id, doc.file_id, doc.file_name]
       );
 
       const documentId = result.rows[0].id;
 
       for (let i = 0; i < pages.length; i++) {
-        const pageText = pages[i].trim();
+        const pageText = pages[i];
         await client.query(
-          'INSERT INTO pages(document_id, page_number, text_content) VALUES ($1, $2, $3)',
+          "INSERT INTO pages(document_id, page_number, text_content) VALUES ($1, $2, $3)",
           [documentId, i + 1, pageText]
         );
       }
 
-      await client.query('COMMIT');
-      await ctx.reply(`✅ فایل با موفقیت ذخیره شد. تعداد صفحات: ${pages.length}`);
+      await client.query("COMMIT");
+      await ctx.reply(
+        `✅ فایل با موفقیت ذخیره شد. تعداد صفحات: ${pages.length}`
+      );
     } catch (err) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       console.error(err);
-      await ctx.reply('❌ خطا در ذخیره داده‌ها.');
+      await ctx.reply("❌ خطا در ذخیره داده‌ها.");
     } finally {
       client.release();
     }
   } catch (err) {
     console.error(err);
-    ctx.reply('❌ پردازش فایل با خطا مواجه شد.');
+    ctx.reply("❌ پردازش فایل با خطا مواجه شد.");
   }
 });
 
 bot.launch();
-console.log('🤖 ربات با موفقیت راه‌اندازی شد.');
-
+console.log("🤖 ربات با موفقیت راه‌اندازی شد.");
